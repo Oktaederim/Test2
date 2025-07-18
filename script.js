@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ui.h.textContent = `${state.h.toFixed(2)} kJ/kg`;
             ui.td.textContent = `${state.Td.toFixed(1)} °C`;
             ui.tw.textContent = `${state.Tw.toFixed(1)} °C`;
-            ui.comfort.className = state.comfortable ? 'comfort-status' : 'comfort-status hidden';
+            ui.comfort.className = 'comfort-status'; // Immer sichtbar
             if (state.comfortable) { ui.comfort.textContent = '✅ Im Behaglichkeitsfeld'; ui.comfort.classList.remove('warning'); ui.comfort.classList.add('success'); }
             else { ui.comfort.textContent = '⚠️ Außerhalb Behaglichkeitsfeld'; ui.comfort.classList.remove('success'); ui.comfort.classList.add('warning'); }
         };
@@ -95,21 +95,33 @@ document.addEventListener('DOMContentLoaded', () => {
         comp.outputs.process.power_heat.textContent = `${Math.abs(heating_power).toFixed(2)} kW`;
         comp.outputs.process.power_cool.textContent = `${Math.abs(cooling_power).toFixed(2)} kW`;
         const water_diff_kg_h = m_dot * (target_state.x_g_kg - initial_state.x_g_kg) * 3600 / 1000;
-        comp.outputs.process.water_diff.textContent = `${Math.abs(water_diff_kg_h).toFixed(2)} kg/h (${water_diff_kg_h > 0 ? 'Befeuchtung' : 'Entfeuchtung'})`;
+        comp.outputs.process.water_diff.textContent = `${Math.abs(water_diff_kg_h).toFixed(2)} kg/h (${water_diff_kg_h >= 0 ? 'Befeuchtung' : 'Entfeuchtung'})`;
     }
     Object.values(comp.inputs).forEach(input => input.addEventListener('input', updateComparator));
     
     // === LOGIK FÜR MODUS 2: PROZESS-SIMULATION ===
     const sim = {
         inputs: { t: document.getElementById('sim-temperature'), rh: document.getElementById('sim-humidity'), p: document.getElementById('sim-pressure'), v_flow: document.getElementById('sim-volume-flow'), processSelect: document.getElementById('sim-process-select'), targetValue: document.getElementById('sim-target-value'), targetLabel: document.getElementById('sim-target-label') },
-        outputs: { current: { x: document.getElementById('sim-current-x'), h: document.getElementById('sim-current-h'), td: document.getElementById('sim-current-td'), rho: document.getElementById('sim-current-rho') }, resultCard: document.getElementById('sim-result-card'), result: { t: document.getElementById('sim-result-t'), rh: document.getElementById('sim-result-rh'), x: document.getElementById('sim-result-x'), powerLabel: document.getElementById('sim-power-label'), powerValue: document.getElementById('sim-power-value'), waterDiff: document.getElementById('sim-water-diff') } },
+        outputs: { current: { x: document.getElementById('sim-current-x'), h: document.getElementById('sim-current-h'), td: document.getElementById('sim-current-td'), rho: document.getElementById('sim-current-rho') }, resultCard: document.getElementById('sim-result-card'), result: { t: document.getElementById('sim-result-t'), rh: document.getElementById('sim-result-rh'), x: document.getElementById('sim-result-x'), h: document.getElementById('sim-result-h'), powerLabel: document.getElementById('sim-power-label'), powerValue: document.getElementById('sim-power-value'), waterDiff: document.getElementById('sim-water-diff') } },
         buttons: { apply: document.getElementById('sim-apply-process-btn'), useAsStart: document.getElementById('sim-use-as-start-btn') }
     };
 
     let sim_currentState = {}, sim_resultState = {};
 
-    function calculateStateFrom_t_x(t, x_g_kg, p) { const x_ratio = x_g_kg / 1000; const DD = p / (1 + (622 / x_ratio)); const SDD = 6.112 * Math.exp((17.62 * t) / (243.12 + t)); return calculateState(t, (DD / SDD) * 100, p); }
+    // KORRIGIERTE Hilfsfunktion
+    function calculateStateFrom_t_x(t, x_g_kg, p) {
+        // Korrekte Umstellung der Formel für die absolute Feuchte nach dem Partialdampfdruck DD
+        const DD = (p * x_g_kg) / (622 + parseFloat(x_g_kg));
+        const SDD = 6.112 * Math.exp((17.62 * t) / (243.12 + t));
+        const rh = (DD / SDD) * 100;
+        return calculateState(t, rh > 100 ? 100 : rh, p); // RH auf max. 100 begrenzen
+    }
     
+    function calculateStateFrom_h_x(h, x_g_kg, p){
+        const t = (h - 2501 * (x_g_kg/1000)) / (1.006 + 0.00186 * (x_g_kg/1000));
+        return calculateStateFrom_t_x(t, x_g_kg, p);
+    }
+
     function updateSimulatorUI() {
         const t = parseFloat(sim.inputs.t.value), rh = parseFloat(sim.inputs.rh.value), p = parseFloat(sim.inputs.p.value);
         sim_currentState = calculateState(t, rh, p);
@@ -135,7 +147,7 @@ document.addEventListener('DOMContentLoaded', () => {
         switch (process) {
             case 'heat': sim_resultState = calculateStateFrom_t_x(targetValue, sim_currentState.x_g_kg, sim_currentState.p); powerLabel = "Heizleistung"; break;
             case 'cool': sim_resultState = targetValue < sim_currentState.Td ? calculateState(targetValue, 100, sim_currentState.p) : calculateStateFrom_t_x(targetValue, sim_currentState.x_g_kg, sim_currentState.p); powerLabel = "Kühlleistung"; break;
-            case 'steam_humidify': sim_resultState = calculateStateFrom_t_x(sim_currentState.t, targetValue, sim_currentState.p); powerLabel = "Heizleistung (Befeuchtung)"; break;
+            case 'steam_humidify': sim_resultState = calculateStateFrom_h_x(sim_currentState.h, targetValue, sim_currentState.p); powerLabel = "Heizleistung (Befeuchtung)"; break;
         }
         power = (v_flow * sim_currentState.rho / 3600) * (sim_resultState.h - sim_currentState.h);
         displaySimResult(power, powerLabel);
@@ -146,6 +158,7 @@ document.addEventListener('DOMContentLoaded', () => {
         sim.outputs.result.t.textContent = `${sim_resultState.t.toFixed(1)} °C`;
         sim.outputs.result.rh.textContent = `${sim_resultState.rh.toFixed(1)} %`;
         sim.outputs.result.x.textContent = `${sim_resultState.x_g_kg.toFixed(2)} g/kg`;
+        sim.outputs.result.h.textContent = `${sim_resultState.h.toFixed(2)} kJ/kg`;
         sim.outputs.result.powerLabel.textContent = powerLabel;
         sim.outputs.result.powerValue.textContent = `${Math.abs(power).toFixed(2)} kW`;
         sim.outputs.result.powerValue.className = power >= 0 ? 'value heat-value' : 'value cool-value';
